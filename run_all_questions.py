@@ -1,3 +1,4 @@
+import traceback
 import argparse
 import json
 from pathlib import Path
@@ -10,7 +11,7 @@ from openpyxl import Workbook
 from src.dataset_loader import load_questions
 from src.role_router import create_agents_for_domain
 from src.schemas import LiteracyLevel
-from src.topologies.fully_connected import FullyConnectedTopology
+from src.topologies.factory import create_topology
 
 
 load_dotenv()
@@ -25,6 +26,13 @@ LITERACY_ARGUMENTS = {
     "marginal": LiteracyLevel.MARGINAL,
     "adequate": LiteracyLevel.ADEQUATE,
 }
+
+TOPOLOGY_ARGUMENTS = [
+    "fully_connected",
+    "independent",
+    "star",
+    "tree",
+]
 
 
 def save_results(
@@ -85,6 +93,7 @@ def save_results(
 
 def run_pipeline(
     literacy_level: LiteracyLevel,
+    topology_name: str,
     limit: int | None = None,
 ):
     """
@@ -112,7 +121,7 @@ def run_pipeline(
 
     output_path = (
         RESULTS_DIR
-        / f"revised_questions_{level_name}.xlsx"
+        / f"revised_questions_{level_name}_{topology_name}.xlsx"
     )
 
     results = []
@@ -125,6 +134,7 @@ def run_pipeline(
     print(f"Literacy level: {literacy_level.value}")
     print(f"Questions to process: {len(questions)}")
     print(f"Output file: {output_path}")
+    print(f"Topology: {topology_name}")
 
     llm = create_llm_client()
 
@@ -147,12 +157,13 @@ def run_pipeline(
         # Automatically choose healthcare agents
         # based on the question's domain.
         agents = create_agents_for_domain(
-        domain=question.domain,
-        llm=llm,
-        )
+            domain=question.domain,
+            llm=llm,
+            )
 
-        topology = FullyConnectedTopology(
-            agents
+        topology = create_topology(
+        topology_name,
+        agents,
         )
 
         try:
@@ -165,13 +176,23 @@ def run_pipeline(
 
         except Exception as error:
 
-            print()
-            print("ERROR processing this question:")
-            print(error)
 
+            print()
+            print("=" * 70)
+            print("ERROR processing this question")
+            print("=" * 70)
+
+            print(f"Error type: {type(error).__name__}")
+            print(f"Error repr: {repr(error)}")
+
+            print()
+            print("Full traceback:")
+            traceback.print_exc()
+
+            print()
             print(
-                "Stopping the run so the issue can "
-                "be inspected safely."
+            "Stopping the run so the issue can "
+            "be inspected safely."
             )
 
             break
@@ -321,6 +342,13 @@ def main():
     )
 
     parser.add_argument(
+        "--topology",
+        choices=TOPOLOGY_ARGUMENTS,
+        default="fully_connected",
+        help="Multi-agent communication topology.",
+        )
+
+    parser.add_argument(
         "--limit",
         type=int,
         default=None,
@@ -338,8 +366,9 @@ def main():
 
     run_pipeline(
         literacy_level=literacy_level,
+        topology_name=args.topology,
         limit=args.limit,
-    )
+        )
 
 
 if __name__ == "__main__":
