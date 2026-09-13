@@ -95,16 +95,23 @@ def run_pipeline(
     literacy_level: LiteracyLevel,
     topology_name: str,
     limit: int | None = None,
-):
+    question_ids: list[int] | None = None,
+    ):
     """
-    Run the fully connected multi-agent system
+    Run the selected multi-agent topology
     over the selected question set.
     """
-
     questions = load_questions(
         DATA_PATH,
         literacy_level,
     )
+
+    if question_ids is not None:
+        questions = [
+            question
+            for question in questions
+            if question.question_id in question_ids
+        ]
 
     if limit is not None:
         questions = questions[:limit]
@@ -159,11 +166,11 @@ def run_pipeline(
         agents = create_agents_for_domain(
             domain=question.domain,
             llm=llm,
-            )
+        )
 
         topology = create_topology(
-        topology_name,
-        agents,
+            topology_name,
+            agents,
         )
 
         try:
@@ -346,7 +353,7 @@ def main():
         choices=TOPOLOGY_ARGUMENTS,
         default="fully_connected",
         help="Multi-agent communication topology.",
-        )
+    )
 
     parser.add_argument(
         "--limit",
@@ -356,6 +363,14 @@ def main():
             "Optional number of questions to run. "
             "Useful for testing."
         ),
+    )
+
+    parser.add_argument(
+        "--ids",
+        type=int,
+        nargs="+",
+        default=None,
+        help="Optional question IDs to process.",
     )
 
     args = parser.parse_args()
@@ -368,7 +383,8 @@ def main():
         literacy_level=literacy_level,
         topology_name=args.topology,
         limit=args.limit,
-        )
+        question_ids=args.ids
+    )
 
 
 if __name__ == "__main__":
