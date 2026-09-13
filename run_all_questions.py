@@ -1,9 +1,10 @@
+import os
+import re
 import traceback
 import argparse
 import json
 from pathlib import Path
 from dotenv import load_dotenv
-
 from src.llm.factory import create_llm_client
 
 from openpyxl import Workbook
@@ -34,6 +35,13 @@ TOPOLOGY_ARGUMENTS = [
     "tree",
 ]
 
+def safe_filename_component(value: str) -> str:
+    """
+    Convert provider/model names into filesystem-safe text.
+    """
+    value = value.strip().lower()
+    value = re.sub(r"[^a-z0-9._-]+", "-", value)
+    return value.strip("-")
 
 def save_results(
     output_path: Path,
@@ -55,6 +63,9 @@ def save_results(
         "Question ID",
         "Domain",
         "Literacy Level",
+        "Topology",
+        "LLM Provider",
+        "LLM Model",
         "Input Question",
         "Final Revised Question",
         "Decision Method",
@@ -65,6 +76,7 @@ def save_results(
         "Round 2 Proposals",
         "Votes",
         "LLM Calls",
+        
     ]
 
     worksheet.append(headers)
@@ -75,6 +87,9 @@ def save_results(
                 row["question_id"],
                 row["domain"],
                 row["literacy_level"],
+                row["topology"],
+                row["llm_provider"],
+                row["llm_model"],
                 row["input_question"],
                 row["final_revised_question"],
                 row["decision_method"],
@@ -96,11 +111,16 @@ def run_pipeline(
     topology_name: str,
     limit: int | None = None,
     question_ids: list[int] | None = None,
-    ):
+):
     """
     Run the selected multi-agent topology
     over the selected question set.
     """
+
+    # --------------------------------------------------
+    # Load questions
+    # --------------------------------------------------
+
     questions = load_questions(
         DATA_PATH,
         literacy_level,
@@ -116,22 +136,81 @@ def run_pipeline(
     if limit is not None:
         questions = questions[:limit]
 
+    # --------------------------------------------------
+    # Create results directory
+    # --------------------------------------------------
+
     RESULTS_DIR.mkdir(
         parents=True,
         exist_ok=True,
     )
 
-    level_name = literacy_level.value.lower().replace(
-        " ",
-        "_",
+    # --------------------------------------------------
+    # Create LLM backend
+    # --------------------------------------------------
+
+    llm = create_llm_client()
+
+    llm_provider = os.getenv(
+        "LLM_PROVIDER",
+        "openai",
+    ).strip().lower()
+
+    llm_model = str(
+        getattr(
+            llm,
+            "model",
+            "unknown_model",
+        )
     )
+
+    # --------------------------------------------------
+    # Build experiment filename
+    # --------------------------------------------------
+
+    level_name = (
+        literacy_level.value
+        .lower()
+        .replace(" ", "_")
+    )
+
+    provider_name = safe_filename_component(
+        llm_provider
+    )
+
+    model_name = safe_filename_component(
+        llm_model
+    )
+
+    test_suffix = ""
+
+    if question_ids is not None:
+        ids_text = "-".join(
+            str(question_id)
+            for question_id in question_ids
+        )
+
+        test_suffix = f"__ids-{ids_text}"
+
+    elif limit is not None:
+        test_suffix = f"__limit-{limit}"
 
     output_path = (
         RESULTS_DIR
-        / f"revised_questions_{level_name}_{topology_name}.xlsx"
+        / (
+            f"{level_name}__"
+            f"{topology_name}__"
+            f"{provider_name}__"
+            f"{model_name}"
+            f"{test_suffix}.xlsx"
+        )
     )
 
     results = []
+
+    # --------------------------------------------------
+    # Experiment information
+    # --------------------------------------------------
 
     print()
     print("=" * 70)
@@ -139,11 +218,15 @@ def run_pipeline(
     print("=" * 70)
 
     print(f"Literacy level: {literacy_level.value}")
+    print(f"Topology: {topology_name}")
+    print(f"LLM provider: {llm_provider}")
+    print(f"LLM model: {llm_model}")
     print(f"Questions to process: {len(questions)}")
     print(f"Output file: {output_path}")
-    print(f"Topology: {topology_name}")
 
-    llm = create_llm_client()
+    # --------------------------------------------------
+    # Run experiment
+    # --------------------------------------------------
 
     for index, question in enumerate(
         questions,
@@ -161,13 +244,13 @@ def run_pipeline(
         print(f"Domain: {question.domain.value}")
         print(f"Input: {question.text}")
 
-        # Automatically choose healthcare agents
-        # based on the question's domain.
+        # Choose healthcare agents based on domain.
         agents = create_agents_for_domain(
             domain=question.domain,
             llm=llm,
         )
 
+        # Create requested communication topology.
         topology = create_topology(
             topology_name,
             agents,
@@ -183,14 +266,20 @@ def run_pipeline(
 
         except Exception as error:
 
-
             print()
             print("=" * 70)
             print("ERROR processing this question")
             print("=" * 70)
 
-            print(f"Error type: {type(error).__name__}")
-            print(f"Error repr: {repr(error)}")
+            print(
+                f"Error type: "
+                f"{type(error).__name__}"
+            )
+
+            print(
+                f"Error repr: "
+                f"{repr(error)}"
+            )
 
             print()
             print("Full traceback:")
@@ -198,11 +287,15 @@ def run_pipeline(
 
             print()
             print(
-            "Stopping the run so the issue can "
-            "be inspected safely."
+                "Stopping the run so the issue can "
+                "be inspected safely."
             )
 
             break
+
+        # --------------------------------------------------
+        # Display final result
+        # --------------------------------------------------
 
         print()
         print("Final revision:")
@@ -215,12 +308,19 @@ def run_pipeline(
             f"{final_selection.decision_method}"
         )
 
-        # Number of LLM calls used for this question.
+        # --------------------------------------------------
+        # Count LLM calls
+        # --------------------------------------------------
+
         llm_calls = (
             len(round_one)
             + len(round_two)
             + len(votes)
         )
+
+        # --------------------------------------------------
+        # Serialize Round 1
+        # --------------------------------------------------
 
         round_one_data = [
             {
@@ -237,6 +337,10 @@ def run_pipeline(
             for proposal in round_one
         ]
 
+        # --------------------------------------------------
+        # Serialize Round 2
+        # --------------------------------------------------
+
         round_two_data = [
             {
                 "agent": proposal.agent_name,
@@ -252,6 +356,10 @@ def run_pipeline(
             for proposal in round_two
         ]
 
+        # --------------------------------------------------
+        # Serialize votes
+        # --------------------------------------------------
+
         vote_data = [
             {
                 "agent": vote.agent_name,
@@ -263,12 +371,19 @@ def run_pipeline(
             for vote in votes
         ]
 
+        # --------------------------------------------------
+        # Build result row
+        # --------------------------------------------------
+
         result_row = {
             "question_id": question.question_id,
             "domain": question.domain.value,
             "literacy_level": (
                 question.literacy_level.value
             ),
+            "topology": topology_name,
+            "llm_provider": llm_provider,
+            "llm_model": llm_model,
             "input_question": question.text,
             "final_revised_question": (
                 final_selection.revised_question
@@ -302,7 +417,7 @@ def run_pipeline(
 
         results.append(result_row)
 
-        # Save after EVERY completed question.
+        # Save after every completed question.
         save_results(
             output_path,
             results,
@@ -318,6 +433,10 @@ def run_pipeline(
             f"{llm_calls}"
         )
 
+    # --------------------------------------------------
+    # Final summary
+    # --------------------------------------------------
+
     print()
     print("=" * 70)
     print("RUN COMPLETE")
@@ -328,7 +447,7 @@ def run_pipeline(
         f"{len(results)} questions"
     )
 
-    print(f"Results saved to:")
+    print("Results saved to:")
     print(output_path)
 
 
