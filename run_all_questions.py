@@ -6,6 +6,8 @@ import json
 from pathlib import Path
 from dotenv import load_dotenv
 from src.llm.factory import create_llm_client
+import subprocess
+from datetime import datetime, timezone
 
 from openpyxl import Workbook
 
@@ -43,6 +45,27 @@ def safe_filename_component(value: str) -> str:
     value = re.sub(r"[^a-z0-9._-]+", "-", value)
     return value.strip("-")
 
+def get_git_commit_hash() -> str:
+    """
+    Return the current Git commit hash for reproducibility.
+    """
+    try:
+        result = subprocess.run(
+            [
+                "git",
+                "rev-parse",
+                "HEAD",
+            ],
+            capture_output=True,
+            text=True,
+            check=True,
+        )
+
+        return result.stdout.strip()
+
+    except Exception:
+        return "unknown"
+
 def save_results(
     output_path: Path,
     rows: list[dict],
@@ -66,6 +89,9 @@ def save_results(
         "Topology",
         "LLM Provider",
         "LLM Model",
+        "Run Timestamp",
+        "Git Commit",
+        "Experiment ID",
         "Input Question",
         "Final Revised Question",
         "Decision Method",
@@ -90,6 +116,9 @@ def save_results(
                 row["topology"],
                 row["llm_provider"],
                 row["llm_model"],
+                row["run_timestamp"],
+                row["git_commit"],
+                row["experiment_id"],
                 row["input_question"],
                 row["final_revised_question"],
                 row["decision_method"],
@@ -164,6 +193,24 @@ def run_pipeline(
         )
     )
 
+    git_commit = get_git_commit_hash()
+
+    run_time = datetime.now(timezone.utc)
+
+    run_timestamp = run_time.isoformat()
+
+    run_id = run_time.strftime(
+    "%Y%m%dT%H%M%SZ"
+    )
+
+    experiment_id = (
+        f"{literacy_level.value.lower().replace(' ', '_')}__"
+        f"{topology_name}__"
+        f"{llm_provider}__"
+        f"{safe_filename_component(llm_model)}__"
+        f"{run_id}"
+    )
+
     # --------------------------------------------------
     # Build experiment filename
     # --------------------------------------------------
@@ -197,12 +244,13 @@ def run_pipeline(
 
     output_path = (
         RESULTS_DIR
-        / (
-            f"{level_name}__"
-            f"{topology_name}__"
-            f"{provider_name}__"
-            f"{model_name}"
-            f"{test_suffix}.xlsx"
+    / (
+        f"{level_name}__"
+        f"{topology_name}__"
+        f"{provider_name}__"
+        f"{model_name}__"
+        f"{run_id}"
+        f"{test_suffix}.xlsx"
         )
     )
 
@@ -221,6 +269,9 @@ def run_pipeline(
     print(f"Topology: {topology_name}")
     print(f"LLM provider: {llm_provider}")
     print(f"LLM model: {llm_model}")
+    print(f"Git commit: {git_commit}")
+    print(f"Run timestamp: {run_timestamp}")
+    print(f"Experiment ID: {experiment_id}")
     print(f"Questions to process: {len(questions)}")
     print(f"Output file: {output_path}")
 
@@ -384,6 +435,9 @@ def run_pipeline(
             "topology": topology_name,
             "llm_provider": llm_provider,
             "llm_model": llm_model,
+            "run_timestamp": run_timestamp,
+            "git_commit": git_commit,
+            "experiment_id": experiment_id,
             "input_question": question.text,
             "final_revised_question": (
                 final_selection.revised_question
@@ -502,7 +556,7 @@ def main():
         literacy_level=literacy_level,
         topology_name=args.topology,
         limit=args.limit,
-        question_ids=args.ids
+        question_ids=args.ids,
     )
 
 
