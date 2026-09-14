@@ -1,4 +1,4 @@
-from src.aggregators.independent import IndependentAggregator
+from src.aggregators.centralized import CentralizedOrchestrator
 from src.schemas import (
     FinalSelection,
     QuestionInput,
@@ -8,23 +8,19 @@ from src.schemas import (
 from src.topologies.fully_connected import FullyConnectedTopology
 
 
-class IndependentTopology(FullyConnectedTopology):
+class CentralizedTopology(FullyConnectedTopology):
     """
-    Paper-aligned Independent MAS topology.
+    Paper-aligned Centralized MAS topology.
 
-    Clinical agents generate revisions independently.
+    Clinical agents independently generate proposals.
 
     There is:
-        - no peer-to-peer communication,
-        - no peer-review round,
-        - no majority voting,
-        - no cross-validation between clinical agents.
+        - no direct peer-to-peer communication,
+        - no clinical-agent voting,
+        - a separate central orchestrator,
+        - centralized verification and final synthesis.
 
-    A neutral synthesis-only aggregator converts the
-    independent revisions into one final patient-facing
-    question required by this task.
-
-    Adapted from the MAS-Independent architecture in:
+    Adapted from the MAS-Centralized architecture in:
     Kim et al., "Towards a Science of Scaling Agent Systems."
     """
 
@@ -33,21 +29,20 @@ class IndependentTopology(FullyConnectedTopology):
 
         if not self.agents:
             raise ValueError(
-                "Independent topology requires at least one agent."
+                "Centralized topology requires at least one clinical agent."
             )
 
-        # All clinical agents within an experiment share
-        # the same underlying LLM.
-        self.aggregator = IndependentAggregator(
+        # The orchestrator uses the same underlying model
+        # as the clinical worker agents in this experiment.
+        self.orchestrator = CentralizedOrchestrator(
             llm=self.agents[0].llm
         )
 
-        # Used by the experiment runner for accurate
-        # LLM-call accounting.
+        # Used by the experiment runner for LLM-call accounting.
         self.extra_llm_calls = 0
 
-        # Preserve the aggregation output for later logging.
-        self.last_aggregation = None
+        # Preserve orchestrator output for possible logging/debugging.
+        self.last_orchestration = None
 
     def run(
         self,
@@ -59,53 +54,51 @@ class IndependentTopology(FullyConnectedTopology):
         FinalSelection,
     ]:
         """
-        Run the Independent MAS pipeline:
+        Run the Centralized MAS pipeline:
 
-        Independent clinical revisions
-        -> synthesis-only aggregation
+        Independent clinical worker proposals
+        -> central orchestrator verification/synthesis
         -> final revised question
         """
 
         # --------------------------------------------------
-        # Independent generation
+        # Worker generation
         # --------------------------------------------------
 
         round_one = self.run_round_one(question)
 
         # --------------------------------------------------
-        # No peer-review stage
+        # No peer-to-peer review
         # --------------------------------------------------
 
         round_two = []
 
         # --------------------------------------------------
-        # Synthesis-only aggregation
+        # Central orchestrator
         # --------------------------------------------------
 
-        synthesized = self.aggregator.synthesize(
+        orchestrated = self.orchestrator.synthesize(
             question=question,
             proposals=round_one,
         )
 
-        self.last_aggregation = synthesized
+        self.last_orchestration = orchestrated
         self.extra_llm_calls = 1
 
         # --------------------------------------------------
-        # No voting in the Independent condition
+        # No worker voting
         # --------------------------------------------------
 
         votes = []
 
-        # Every independent clinical agent contributed
-        # information to the synthesis stage.
         source_agents = [
             proposal.agent_name
             for proposal in round_one
         ]
 
         final_selection = FinalSelection(
-            revised_question=synthesized.revised_question,
-            decision_method="independent_synthesis",
+            revised_question=orchestrated.revised_question,
+            decision_method="centralized_orchestrator",
             winning_candidate_id=None,
             source_agents=source_agents,
             vote_counts={},

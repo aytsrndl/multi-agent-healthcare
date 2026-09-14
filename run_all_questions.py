@@ -31,8 +31,11 @@ LITERACY_ARGUMENTS = {
 }
 
 TOPOLOGY_ARGUMENTS = [
-    "fully_connected",
     "independent",
+    "centralized",
+    "decentralized",
+    "hybrid",
+    "fully_connected",
     "star",
     "tree",
 ]
@@ -364,10 +367,15 @@ def run_pipeline(
         # --------------------------------------------------
 
         llm_calls = (
-            len(round_one)
-            + len(round_two)
-            + len(votes)
-        )
+        len(round_one)
+        + len(round_two)
+        + len(votes)
+        + getattr(
+        topology,
+        "extra_llm_calls",
+        0,
+    )
+)
 
         # --------------------------------------------------
         # Serialize Round 1

@@ -5,9 +5,6 @@ from src.schemas import (
     Vote,
 )
 
-from src.schemas import QuestionInput, RevisionProposal, Vote
-
-
 
 class Agent:
     def __init__(
@@ -46,16 +43,18 @@ HEALTH LITERACY LEVEL:
 
 IMPORTANT RULES:
 1. Preserve the patient's original clinical intent.
-2. Do not diagnose the patient.
-3. Do not add symptoms that were not stated.
-4. Do not add timing that was not stated.
-5. Do not add severity that was not stated.
-6. Do not add causes that were not stated.
-7. Do not add medications that were not stated.
-8. Do not add medical history that was not stated.
-9. Do not introduce unsupported clinical information.
-10. Keep the revised question realistic as a patient-generated question.
-11. Improve communication, not medical content.
+2. Preserve whether the patient is asking what, why, when, how,
+   whether, or another type of question.
+3. Do not diagnose the patient.
+4. Do not add symptoms that were not stated.
+5. Do not add timing that was not stated.
+6. Do not add severity that was not stated.
+7. Do not add causes that were not stated.
+8. Do not add medications that were not stated.
+9. Do not add medical history that was not stated.
+10. Do not introduce unsupported clinical information.
+11. Keep the revised question realistic as a patient-generated question.
+12. Improve communication, not medical content.
 
 Return:
 - a revised patient question,
@@ -65,8 +64,8 @@ Return:
 """
 
         proposal = self.llm.generate_structured(
-        prompt=prompt,
-        output_schema=RevisionProposal,
+            prompt=prompt,
+            output_schema=RevisionProposal,
         )
 
         if proposal is None:
@@ -152,12 +151,9 @@ Return:
 """
 
         proposal = self.llm.generate_structured(
-        prompt=prompt,
-        output_schema=RevisionProposal,
+            prompt=prompt,
+            output_schema=RevisionProposal,
         )
-
-        proposal.agent_name = self.name
-        return proposal
 
         if proposal is None:
             raise ValueError(
@@ -230,11 +226,9 @@ Return ONLY the anonymous candidate ID you prefer
 """
 
         vote = self.llm.generate_structured(
-        prompt=prompt,
-        output_schema=Vote,
+            prompt=prompt,
+            output_schema=Vote,
         )
-
-        vote.agent_name = self.name
 
         if vote is None:
             raise ValueError(

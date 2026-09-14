@@ -1,20 +1,35 @@
-from src.schemas import QuestionInput, RevisionProposal, Domain, LiteracyLevel
-from src.topologies.fully_connected import FullyConnectedTopology
+from src.schemas import (
+    QuestionInput,
+    RevisionProposal,
+    Domain,
+    LiteracyLevel,
+)
+
 from src.topologies.independent import IndependentTopology
-from src.topologies.star import StarTopology
-from src.topologies.tree import TreeTopology
+from src.topologies.centralized import CentralizedTopology
+from src.topologies.decentralized import DecentralizedTopology
+from src.topologies.hybrid import HybridTopology
 
 
 class RecordingAgent:
     """
-    Minimal test agent that records which peer proposals
-    it was allowed to observe.
+    Minimal clinical agent used only for topology testing.
 
-    No LLM calls are made.
+    Records:
+        - how many times it generates independently,
+        - how many times it performs peer review,
+        - which peer proposals it was allowed to see.
+
+    No real LLM calls are made.
     """
 
     def __init__(self, name: str):
         self.name = name
+
+        # Topology constructors expect agents to have an LLM.
+        # It is never actually called in these tests.
+        self.llm = object()
+
         self.seen_peers = []
         self.review_calls = 0
         self.propose_calls = 0
@@ -26,12 +41,9 @@ class RecordingAgent:
 
         self.propose_calls += 1
 
-        # All agents intentionally return the same text
-        # so IndependentTopology reaches consensus and
-        # does not require voting.
         return RevisionProposal(
             agent_name=self.name,
-            revised_question="Test revised question?",
+            revised_question=f"Proposal from {self.name}",
             meaning_preserved=True,
             unsupported_information_added=False,
             brief_note="Test proposal.",
@@ -62,6 +74,44 @@ class RecordingAgent:
         )
 
 
+class RecordingAggregator:
+    """
+    Fake synthesis/orchestrator component.
+
+    Records which clinical-agent outputs it receives.
+
+    No real LLM call is made.
+    """
+
+    def __init__(self, name: str):
+        self.name = name
+        self.calls = 0
+        self.received_agents = []
+
+    def synthesize(
+        self,
+        question: QuestionInput,
+        proposals: list[RevisionProposal],
+    ) -> RevisionProposal:
+
+        self.calls += 1
+
+        self.received_agents.append(
+            [
+                proposal.agent_name
+                for proposal in proposals
+            ]
+        )
+
+        return RevisionProposal(
+            agent_name=self.name,
+            revised_question="Final synthesized question?",
+            meaning_preserved=True,
+            unsupported_information_added=False,
+            brief_note="Test synthesis.",
+        )
+
+
 def make_question() -> QuestionInput:
     return QuestionInput(
         question_id=1,
@@ -71,158 +121,268 @@ def make_question() -> QuestionInput:
     )
 
 
-def make_round_one(
-    agents: list[RecordingAgent],
-) -> list[RevisionProposal]:
-
+def make_agents() -> list[RecordingAgent]:
     return [
-        RevisionProposal(
-            agent_name=agent.name,
-            revised_question=f"Proposal from {agent.name}",
-            meaning_preserved=True,
-            unsupported_information_added=False,
-            brief_note="Test.",
-        )
-        for agent in agents
-    ]
-
-
-def test_fully_connected():
-    agents = [
         RecordingAgent("A"),
         RecordingAgent("B"),
         RecordingAgent("C"),
     ]
 
-    topology = FullyConnectedTopology(agents)
 
-    topology.run_round_two(
-        question=make_question(),
-        round_one_proposals=make_round_one(agents),
-    )
-
-    assert agents[0].seen_peers == [["B", "C"]]
-    assert agents[1].seen_peers == [["A", "C"]]
-    assert agents[2].seen_peers == [["A", "B"]]
-
-    print("Fully Connected:")
-    print("  A sees B, C")
-    print("  B sees A, C")
-    print("  C sees A, B")
-
-
-def test_star():
-    agents = [
-        RecordingAgent("A"),
-        RecordingAgent("B"),
-        RecordingAgent("C"),
-    ]
-
-    topology = StarTopology(agents)
-
-    topology.run_round_two(
-        question=make_question(),
-        round_one_proposals=make_round_one(agents),
-    )
-
-    assert agents[0].seen_peers == [["B", "C"]]
-    assert agents[1].seen_peers == [["A"]]
-    assert agents[2].seen_peers == [["A"]]
-
-    print("Star:")
-    print("  Hub A sees B, C")
-    print("  B sees A")
-    print("  C sees A")
-
-
-def test_tree_three_agents():
-    agents = [
-        RecordingAgent("A"),
-        RecordingAgent("B"),
-        RecordingAgent("C"),
-    ]
-
-    topology = TreeTopology(agents)
-
-    topology.run_round_two(
-        question=make_question(),
-        round_one_proposals=make_round_one(agents),
-    )
-
-    assert agents[0].seen_peers == [["B"]]
-    assert agents[1].seen_peers == [["C"]]
-    assert agents[2].seen_peers == [[]]
-
-    print("Tree (3 agents):")
-    print("  Leaf C sees nobody")
-    print("  Intermediate B sees C")
-    print("  Root A sees B")
-
-
-def test_tree_four_agents():
-    agents = [
-        RecordingAgent("A"),
-        RecordingAgent("B"),
-        RecordingAgent("C"),
-        RecordingAgent("D"),
-    ]
-
-    topology = TreeTopology(agents)
-
-    topology.run_round_two(
-        question=make_question(),
-        round_one_proposals=make_round_one(agents),
-    )
-
-    assert agents[0].seen_peers == [["B"]]
-    assert agents[1].seen_peers == [["C", "D"]]
-    assert agents[2].seen_peers == [[]]
-    assert agents[3].seen_peers == [[]]
-
-    print("Tree (4 agents):")
-    print("  Leaves C, D see nobody")
-    print("  Intermediate B sees C, D")
-    print("  Root A sees B")
-
+# ==========================================================
+# INDEPENDENT
+# ==========================================================
 
 def test_independent():
-    agents = [
-        RecordingAgent("A"),
-        RecordingAgent("B"),
-        RecordingAgent("C"),
-    ]
+
+    agents = make_agents()
 
     topology = IndependentTopology(agents)
+
+    recorder = RecordingAggregator(
+        "Independent Aggregator"
+    )
+
+    # Replace real LLM-based aggregator with test recorder.
+    topology.aggregator = recorder
 
     (
         round_one,
         round_two,
         votes,
         final_selection,
-    ) = topology.run(make_question())
+    ) = topology.run(
+        make_question()
+    )
 
     assert len(round_one) == 3
     assert round_two == []
     assert votes == []
 
+    # Every clinical agent generated exactly once.
     for agent in agents:
         assert agent.propose_calls == 1
+
+        # No peer communication.
         assert agent.review_calls == 0
         assert agent.seen_peers == []
 
-    print("Independent:")
-    print("  No agent performs peer review")
-    print("  No agent sees another proposal during revision")
+    # Aggregator receives all independent outputs.
+    assert recorder.calls == 1
 
+    assert recorder.received_agents == [
+        ["A", "B", "C"]
+    ]
+
+    assert (
+        final_selection.decision_method
+        == "independent_synthesis"
+    )
+
+    print("Independent:")
+    print("  A sees no peers")
+    print("  B sees no peers")
+    print("  C sees no peers")
+    print("  Aggregator receives A, B, C")
+
+
+# ==========================================================
+# CENTRALIZED
+# ==========================================================
+
+def test_centralized():
+
+    agents = make_agents()
+
+    topology = CentralizedTopology(agents)
+
+    recorder = RecordingAggregator(
+        "Centralized Orchestrator"
+    )
+
+    # Replace real orchestrator with test recorder.
+    topology.orchestrator = recorder
+
+    (
+        round_one,
+        round_two,
+        votes,
+        final_selection,
+    ) = topology.run(
+        make_question()
+    )
+
+    assert len(round_one) == 3
+    assert round_two == []
+    assert votes == []
+
+    # Workers operate independently.
+    for agent in agents:
+        assert agent.propose_calls == 1
+
+        # No worker-to-worker communication.
+        assert agent.review_calls == 0
+        assert agent.seen_peers == []
+
+    # Central orchestrator receives all worker outputs.
+    assert recorder.calls == 1
+
+    assert recorder.received_agents == [
+        ["A", "B", "C"]
+    ]
+
+    assert (
+        final_selection.decision_method
+        == "centralized_orchestrator"
+    )
+
+    print("Centralized:")
+    print("  A sees no peers")
+    print("  B sees no peers")
+    print("  C sees no peers")
+    print("  Orchestrator receives A, B, C")
+
+
+# ==========================================================
+# DECENTRALIZED
+# ==========================================================
+
+def test_decentralized():
+
+    agents = make_agents()
+
+    topology = DecentralizedTopology(agents)
+
+    round_one = [
+        agent.propose_revision(
+            make_question()
+        )
+        for agent in agents
+    ]
+
+    round_two = topology.run_round_two(
+        question=make_question(),
+        round_one_proposals=round_one,
+    )
+
+    assert len(round_two) == 3
+
+    # All-to-all peer communication.
+    assert agents[0].seen_peers == [
+        ["B", "C"]
+    ]
+
+    assert agents[1].seen_peers == [
+        ["A", "C"]
+    ]
+
+    assert agents[2].seen_peers == [
+        ["A", "B"]
+    ]
+
+    # Each agent performs exactly one peer-review step.
+    for agent in agents:
+        assert agent.review_calls == 1
+
+    print("Decentralized:")
+    print("  A sees B, C")
+    print("  B sees A, C")
+    print("  C sees A, B")
+    print("  No central orchestrator")
+
+
+# ==========================================================
+# HYBRID
+# ==========================================================
+
+def test_hybrid():
+
+    agents = make_agents()
+
+    topology = HybridTopology(agents)
+
+    recorder = RecordingAggregator(
+        "Hybrid Orchestrator"
+    )
+
+    topology.orchestrator = recorder
+
+    (
+        round_one,
+        round_two,
+        votes,
+        final_selection,
+    ) = topology.run(
+        make_question()
+    )
+
+    assert len(round_one) == 3
+    assert len(round_two) == 3
+    assert votes == []
+
+    # Peer-to-peer communication occurs.
+    assert agents[0].seen_peers == [
+        ["B", "C"]
+    ]
+
+    assert agents[1].seen_peers == [
+        ["A", "C"]
+    ]
+
+    assert agents[2].seen_peers == [
+        ["A", "B"]
+    ]
+
+    for agent in agents:
+        assert agent.propose_calls == 1
+        assert agent.review_calls == 1
+
+    # Orchestrator receives the peer-reviewed outputs.
+    assert recorder.calls == 1
+
+    assert recorder.received_agents == [
+        ["A", "B", "C"]
+    ]
+
+    assert (
+        final_selection.decision_method
+        == "hybrid_orchestrator"
+    )
+
+    print("Hybrid:")
+    print("  A sees B, C")
+    print("  B sees A, C")
+    print("  C sees A, B")
+    print(
+        "  Orchestrator receives the "
+        "peer-reviewed outputs from A, B, C"
+    )
+
+
+# ==========================================================
+# RUN ALL TESTS
+# ==========================================================
 
 if __name__ == "__main__":
+
     test_independent()
-    test_star()
-    test_tree_three_agents()
-    test_tree_four_agents()
-    test_fully_connected()
+
+    print()
+
+    test_centralized()
+
+    print()
+
+    test_decentralized()
+
+    print()
+
+    test_hybrid()
 
     print()
     print("=" * 60)
-    print("ALL TOPOLOGY VISIBILITY TESTS PASSED")
+    print(
+        "ALL PAPER-ALIGNED TOPOLOGY "
+        "VISIBILITY TESTS PASSED"
+    )
     print("=" * 60)
