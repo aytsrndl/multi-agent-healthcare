@@ -320,44 +320,66 @@ def test_hybrid():
     assert len(round_two) == 3
     assert votes == []
 
-    # Peer-to-peer communication occurs.
+    # --------------------------------------------------
+    # Each worker receives:
+    #   - raw proposals from the other workers
+    #   - initial centralized orchestrator guidance
+    # --------------------------------------------------
+
     assert agents[0].seen_peers == [
-        ["B", "C"]
+        ["B", "C", "Hybrid Orchestrator"]
     ]
 
     assert agents[1].seen_peers == [
-        ["A", "C"]
+        ["A", "C", "Hybrid Orchestrator"]
     ]
 
     assert agents[2].seen_peers == [
-        ["A", "B"]
+        ["A", "B", "Hybrid Orchestrator"]
     ]
 
+    # Each worker generates once and then performs
+    # one peer-enhanced refinement.
     for agent in agents:
         assert agent.propose_calls == 1
         assert agent.review_calls == 1
 
-    # Orchestrator receives the peer-reviewed outputs.
-    assert recorder.calls == 1
+    # --------------------------------------------------
+    # Orchestrator is called twice:
+    #
+    # 1. Initial centralized orchestration over Round 1
+    # 2. Final synthesis over peer-enhanced Round 2
+    # --------------------------------------------------
+
+    assert recorder.calls == 2
 
     assert recorder.received_agents == [
-        ["A", "B", "C"]
+        ["A", "B", "C"],
+        ["A", "B", "C"],
     ]
 
     assert (
         final_selection.decision_method
-        == "hybrid_orchestrator"
+        == "hybrid_peer_enhanced_orchestrator"
     )
 
     print("Hybrid:")
-    print("  A sees B, C")
-    print("  B sees A, C")
-    print("  C sees A, B")
     print(
-        "  Orchestrator receives the "
-        "peer-reviewed outputs from A, B, C"
+        "  Initial orchestrator receives A, B, C"
     )
-
+    print(
+        "  A sees B, C + orchestrator guidance"
+    )
+    print(
+        "  B sees A, C + orchestrator guidance"
+    )
+    print(
+        "  C sees A, B + orchestrator guidance"
+    )
+    print(
+        "  Final orchestrator receives "
+        "peer-enhanced A, B, C"
+    )
 
 # ==========================================================
 # RUN ALL TESTS
