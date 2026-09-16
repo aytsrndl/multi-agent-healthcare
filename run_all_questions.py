@@ -1,16 +1,20 @@
+import os
+import re
+import traceback
 import argparse
 import json
 from pathlib import Path
 from dotenv import load_dotenv
-
 from src.llm.factory import create_llm_client
+import subprocess
+from datetime import datetime, timezone
 
 from openpyxl import Workbook
 
 from src.dataset_loader import load_questions
 from src.role_router import create_agents_for_domain
 from src.schemas import LiteracyLevel
-from src.topologies.fully_connected import FullyConnectedTopology
+from src.topologies.factory import create_topology
 
 
 load_dotenv()
@@ -26,6 +30,44 @@ LITERACY_ARGUMENTS = {
     "adequate": LiteracyLevel.ADEQUATE,
 }
 
+TOPOLOGY_ARGUMENTS = [
+    "independent",
+    "centralized",
+    "decentralized",
+    "hybrid",
+    "fully_connected",
+    "star",
+    "tree",
+]
+
+def safe_filename_component(value: str) -> str:
+    """
+    Convert provider/model names into filesystem-safe text.
+    """
+    value = value.strip().lower()
+    value = re.sub(r"[^a-z0-9._-]+", "-", value)
+    return value.strip("-")
+
+def get_git_commit_hash() -> str:
+    """
+    Return the current Git commit hash for reproducibility.
+    """
+    try:
+        result = subprocess.run(
+            [
+                "git",
+                "rev-parse",
+                "HEAD",
+            ],
+            capture_output=True,
+            text=True,
+            check=True,
+        )
+
+        return result.stdout.strip()
+
+    except Exception:
+        return "unknown"
 
 def save_results(
     output_path: Path,
@@ -47,6 +89,12 @@ def save_results(
         "Question ID",
         "Domain",
         "Literacy Level",
+        "Topology",
+        "LLM Provider",
+        "LLM Model",
+        "Run Timestamp",
+        "Git Commit",
+        "Experiment ID",
         "Input Question",
         "Final Revised Question",
         "Decision Method",
@@ -57,6 +105,7 @@ def save_results(
         "Round 2 Proposals",
         "Votes",
         "LLM Calls",
+        
     ]
 
     worksheet.append(headers)
@@ -67,6 +116,12 @@ def save_results(
                 row["question_id"],
                 row["domain"],
                 row["literacy_level"],
+                row["topology"],
+                row["llm_provider"],
+                row["llm_model"],
+                row["run_timestamp"],
+                row["git_commit"],
+                row["experiment_id"],
                 row["input_question"],
                 row["final_revised_question"],
                 row["decision_method"],
@@ -85,37 +140,128 @@ def save_results(
 
 def run_pipeline(
     literacy_level: LiteracyLevel,
+    topology_name: str,
     limit: int | None = None,
+    question_ids: list[int] | None = None,
 ):
     """
-    Run the fully connected multi-agent system
+    Run the selected multi-agent topology
     over the selected question set.
     """
+
+    # --------------------------------------------------
+    # Load questions
+    # --------------------------------------------------
 
     questions = load_questions(
         DATA_PATH,
         literacy_level,
     )
 
+    if question_ids is not None:
+        questions = [
+            question
+            for question in questions
+            if question.question_id in question_ids
+        ]
+
     if limit is not None:
         questions = questions[:limit]
+
+    # --------------------------------------------------
+    # Create results directory
+    # --------------------------------------------------
 
     RESULTS_DIR.mkdir(
         parents=True,
         exist_ok=True,
     )
 
-    level_name = literacy_level.value.lower().replace(
-        " ",
-        "_",
+    # --------------------------------------------------
+    # Create LLM backend
+    # --------------------------------------------------
+
+    llm = create_llm_client()
+
+    llm_provider = os.getenv(
+        "LLM_PROVIDER",
+        "openai",
+    ).strip().lower()
+
+    llm_model = str(
+        getattr(
+            llm,
+            "model",
+            "unknown_model",
+        )
     )
+
+    git_commit = get_git_commit_hash()
+
+    run_time = datetime.now(timezone.utc)
+
+    run_timestamp = run_time.isoformat()
+
+    run_id = run_time.strftime(
+    "%Y%m%dT%H%M%SZ"
+    )
+
+    experiment_id = (
+        f"{literacy_level.value.lower().replace(' ', '_')}__"
+        f"{topology_name}__"
+        f"{llm_provider}__"
+        f"{safe_filename_component(llm_model)}__"
+        f"{run_id}"
+    )
+
+    # --------------------------------------------------
+    # Build experiment filename
+    # --------------------------------------------------
+
+    level_name = (
+        literacy_level.value
+        .lower()
+        .replace(" ", "_")
+    )
+
+    provider_name = safe_filename_component(
+        llm_provider
+    )
+
+    model_name = safe_filename_component(
+        llm_model
+    )
+
+    test_suffix = ""
+
+    if question_ids is not None:
+        ids_text = "-".join(
+            str(question_id)
+            for question_id in question_ids
+        )
+
+        test_suffix = f"__ids-{ids_text}"
+
+    elif limit is not None:
+        test_suffix = f"__limit-{limit}"
 
     output_path = (
         RESULTS_DIR
-        / f"revised_questions_{level_name}.xlsx"
+    / (
+        f"{level_name}__"
+        f"{topology_name}__"
+        f"{provider_name}__"
+        f"{model_name}__"
+        f"{run_id}"
+        f"{test_suffix}.xlsx"
+        )
     )
 
     results = []
+
+    # --------------------------------------------------
+    # Experiment information
+    # --------------------------------------------------
 
     print()
     print("=" * 70)
@@ -123,10 +269,18 @@ def run_pipeline(
     print("=" * 70)
 
     print(f"Literacy level: {literacy_level.value}")
+    print(f"Topology: {topology_name}")
+    print(f"LLM provider: {llm_provider}")
+    print(f"LLM model: {llm_model}")
+    print(f"Git commit: {git_commit}")
+    print(f"Run timestamp: {run_timestamp}")
+    print(f"Experiment ID: {experiment_id}")
     print(f"Questions to process: {len(questions)}")
     print(f"Output file: {output_path}")
 
-    llm = create_llm_client()
+    # --------------------------------------------------
+    # Run experiment
+    # --------------------------------------------------
 
     for index, question in enumerate(
         questions,
@@ -144,15 +298,16 @@ def run_pipeline(
         print(f"Domain: {question.domain.value}")
         print(f"Input: {question.text}")
 
-        # Automatically choose healthcare agents
-        # based on the question's domain.
+        # Choose healthcare agents based on domain.
         agents = create_agents_for_domain(
-        domain=question.domain,
-        llm=llm,
+            domain=question.domain,
+            llm=llm,
         )
 
-        topology = FullyConnectedTopology(
-            agents
+        # Create requested communication topology.
+        topology = create_topology(
+            topology_name,
+            agents,
         )
 
         try:
@@ -166,15 +321,35 @@ def run_pipeline(
         except Exception as error:
 
             print()
-            print("ERROR processing this question:")
-            print(error)
+            print("=" * 70)
+            print("ERROR processing this question")
+            print("=" * 70)
 
+            print(
+                f"Error type: "
+                f"{type(error).__name__}"
+            )
+
+            print(
+                f"Error repr: "
+                f"{repr(error)}"
+            )
+
+            print()
+            print("Full traceback:")
+            traceback.print_exc()
+
+            print()
             print(
                 "Stopping the run so the issue can "
                 "be inspected safely."
             )
 
             break
+
+        # --------------------------------------------------
+        # Display final result
+        # --------------------------------------------------
 
         print()
         print("Final revision:")
@@ -187,12 +362,24 @@ def run_pipeline(
             f"{final_selection.decision_method}"
         )
 
-        # Number of LLM calls used for this question.
+        # --------------------------------------------------
+        # Count LLM calls
+        # --------------------------------------------------
+
         llm_calls = (
-            len(round_one)
-            + len(round_two)
-            + len(votes)
-        )
+        len(round_one)
+        + len(round_two)
+        + len(votes)
+        + getattr(
+        topology,
+        "extra_llm_calls",
+        0,
+    )
+)
+
+        # --------------------------------------------------
+        # Serialize Round 1
+        # --------------------------------------------------
 
         round_one_data = [
             {
@@ -209,6 +396,10 @@ def run_pipeline(
             for proposal in round_one
         ]
 
+        # --------------------------------------------------
+        # Serialize Round 2
+        # --------------------------------------------------
+
         round_two_data = [
             {
                 "agent": proposal.agent_name,
@@ -224,6 +415,10 @@ def run_pipeline(
             for proposal in round_two
         ]
 
+        # --------------------------------------------------
+        # Serialize votes
+        # --------------------------------------------------
+
         vote_data = [
             {
                 "agent": vote.agent_name,
@@ -235,12 +430,22 @@ def run_pipeline(
             for vote in votes
         ]
 
+        # --------------------------------------------------
+        # Build result row
+        # --------------------------------------------------
+
         result_row = {
             "question_id": question.question_id,
             "domain": question.domain.value,
             "literacy_level": (
                 question.literacy_level.value
             ),
+            "topology": topology_name,
+            "llm_provider": llm_provider,
+            "llm_model": llm_model,
+            "run_timestamp": run_timestamp,
+            "git_commit": git_commit,
+            "experiment_id": experiment_id,
             "input_question": question.text,
             "final_revised_question": (
                 final_selection.revised_question
@@ -274,7 +479,7 @@ def run_pipeline(
 
         results.append(result_row)
 
-        # Save after EVERY completed question.
+        # Save after every completed question.
         save_results(
             output_path,
             results,
@@ -290,6 +495,10 @@ def run_pipeline(
             f"{llm_calls}"
         )
 
+    # --------------------------------------------------
+    # Final summary
+    # --------------------------------------------------
+
     print()
     print("=" * 70)
     print("RUN COMPLETE")
@@ -300,7 +509,7 @@ def run_pipeline(
         f"{len(results)} questions"
     )
 
-    print(f"Results saved to:")
+    print("Results saved to:")
     print(output_path)
 
 
@@ -321,6 +530,13 @@ def main():
     )
 
     parser.add_argument(
+        "--topology",
+        choices=TOPOLOGY_ARGUMENTS,
+        default="fully_connected",
+        help="Multi-agent communication topology.",
+    )
+
+    parser.add_argument(
         "--limit",
         type=int,
         default=None,
@@ -328,6 +544,14 @@ def main():
             "Optional number of questions to run. "
             "Useful for testing."
         ),
+    )
+
+    parser.add_argument(
+        "--ids",
+        type=int,
+        nargs="+",
+        default=None,
+        help="Optional question IDs to process.",
     )
 
     args = parser.parse_args()
@@ -338,7 +562,9 @@ def main():
 
     run_pipeline(
         literacy_level=literacy_level,
+        topology_name=args.topology,
         limit=args.limit,
+        question_ids=args.ids,
     )
 
 
